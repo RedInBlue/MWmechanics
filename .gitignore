@@ -1,0 +1,13 @@
+# Game files and anything copyrighted: never commit these
+*.exe
+*.bin
+*.lzc
+*.zip
+GLOBAL/
+
+# Recordings and scratch output
+*.csv
+out_*/
+ai_*/
+__pycache__/
+*.pyc

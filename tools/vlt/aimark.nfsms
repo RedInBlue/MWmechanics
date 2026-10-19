@@ -1,0 +1,3 @@
+update_field aivehicle racers TopSpeedMultiplier 1001
+update_field aivehicle racers AccelerationMultiplier 1002
+update_field aivehicle racers MAXIMUM_AI_SPEED 1003
