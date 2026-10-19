@@ -43,20 +43,39 @@ struct GameInfo {
     TireOffsets tire;
     RacerOffsets racer;
     // Per-racer race log (Carbon only, 0 = off): second grip-scale call site (SuspensionSimple),
-    // and the AIPerpVehicle ICheater::GetCatchupCheat vtable slot + original function.
+    // and the ICheater::GetCatchupCheat vtable slots (AIPerpVehicle, and AIVehicleRacecar which
+    // racers use) + the original function both slots hold.
     uintptr_t simpleCallSite;
-    uintptr_t cheatSlot, cheatFn;
+    uintptr_t cheatSlots[2], cheatFn;
+    // AIActionRace::ComputePotentials (performance bias, planned limits) and its two call sites,
+    // PVehicle's IVehicle vtable (to validate pointers before reading the cached Performance),
+    // the player IVehicle list (begin pointer, count), the GRaceStatus pointer and the two race
+    // parameter queries ComputePotentials uses to pick its floor.
+    uintptr_t potentialsFn, potentialsSites[2];
+    uintptr_t vehicleVtbl, playersBegin, playersCount;
+    uintptr_t raceStatus, raceFlagA, raceFlagB;
+    // PVehicle factory: the constructor call (its 8th argument is the Performance the car is rated
+    // with, VehicleParams+0x34 or an estimate) and the call to the estimator it falls back on.
+    uintptr_t vehicleCtorSite, vehicleCtor, estimateSite, estimateFn;
 };
 
 // Offsets from MW decomp (SuspensionRacer, PC layout = console + 8) and matching Carbon disassembly
 static GameInfo kGames[] = {
     {"MW", 0x6B1F79, 0x68D5F0, 0x8F8AA8, 0x1B4,
      {0xD4, 0xD8, 0xDC, 0x110, 0x118, 0x128, 0xEC, 0x12C, 0xFC, 0xD0, 0xF0, 0xE0, 0xC4, -1, -1, -1},
-     {0x11C, 0x120, 0x124, 0x12C, 0x1B0, 0x104, 0x108, 0x10C, 0x114, 0xA0, 0x4C, -1, -1, -1, -1}, 0, 0, 0},
+     {0x11C, 0x120, 0x124, 0x12C, 0x1B0, 0x104, 0x108, 0x10C, 0x114, 0xA0, 0x4C, -1, -1, -1, -1}, 0, {0, 0}, 0},
     {"Carbon", 0x703C05, 0x6DE890, 0xA6358C, 0x1C0,
      {0xD0, 0xD4, 0xD8, 0x10C, 0x114, 0x11C, 0xE8, 0x120, 0xF8, 0xCC, 0xEC, 0xDC, 0xC0, 0x124, 0x128, 0x12C},
-     {0x104, 0x108, 0x10C, 0x114, 0x198, 0xEC, 0xF0, 0xF4, 0xFC, 0x90, 0x88, 0xB0, 0x7C, 0x6C, 0x54}, 0x7046E8, 0x9C4ABC, 0x40AE80},
+     {0x104, 0x108, 0x10C, 0x114, 0x198, 0xEC, 0xF0, 0xF4, 0xFC, 0x90, 0x88, 0xB0, 0x7C, 0x6C, 0x54}, 0x7046E8, {0x9C4ABC, 0x9C4D44}, 0x40AE80,
+     0x42F4F0, {0x436005, 0x4361E9}, 0x9E4A78, 0xA9F1E4, 0xA9F1EC, 0xA98284, 0x63D720, 0x63E180,
+     0x6DAE34, 0x6DA530, 0x6DADA7, 0x6CE330},
 };
+
+// AIActionRace fields written by ComputePotentials (Carbon): bias TopSpeed/Handling/Acceleration,
+// planned top speed (m/s), start/end lateral grip (g), NOS capability, usable NOS, then the aivehicle
+// TopSpeedMultiplier, MAXIMUM_AI_SPEED (m/s) and AccelerationMultiplier cached by the action's setup.
+static const int kPlanOffsets[] = {0x7C, 0x80, 0x84, 0xA4, 0x9C, 0xA0, 0x88, 0x90, 0xC0, 0xC4, 0xC8};
+static const int kNumPlan = sizeof(kPlanOffsets) / sizeof(kPlanOffsets[0]);
 
 // Per-car state for the race log, keyed by the car's COM object (shared by all its interfaces:
 // [ISimable+4] from the suspension's owner, [ICheater+4] from the catch-up hook).
@@ -65,6 +84,9 @@ struct CarRec {
     int id;
     double dist, lastLog, cheatTime;
     float baseSkill, glueSkill, cheat, cheatOverride;
+    float perf[3];          // the car's own Physics::Info::Performance (TopSpeed, Handling, Acceleration)
+    float plan[kNumPlan];   // AI only, see kPlanOffsets
+    DWORD seen;             // GetTickCount of the last lookup
 };
 static CarRec gCars[64];
 static int gNumCars = 0;
@@ -72,12 +94,23 @@ static FILE *gRaceFile = nullptr;
 static double gPlayerDist = 0.0;
 
 static CarRec *FindCar(const void *key) {
+    DWORD now = GetTickCount();
     for (int i = 0; i < gNumCars; i++)
-        if (gCars[i].key == key) return &gCars[i];
-    if (gNumCars >= 64) return nullptr;
-    CarRec &c = gCars[gNumCars];
-    c = CarRec{key, gNumCars, 0.0, -1.0, -1.0, NAN, NAN, NAN, NAN};
-    gNumCars++;
+        if (gCars[i].key == key) {
+            gCars[i].seen = now;
+            return &gCars[i];
+        }
+    // Table full (cars from earlier races are never removed): reuse the one seen longest ago
+    int slot = gNumCars;
+    if (gNumCars < 64) gNumCars++;
+    else
+        for (int i = slot = 0; i < 64; i++)
+            if (now - gCars[i].seen > now - gCars[slot].seen) slot = i;
+    CarRec &c = gCars[slot];
+    c = CarRec{key, slot, 0.0, -1.0, -1.0, NAN, NAN, NAN, NAN};
+    for (float &v : c.perf) v = NAN;
+    for (float &v : c.plan) v = NAN;
+    c.seen = now;
     return &c;
 }
 
@@ -128,7 +161,9 @@ static void StartRecording() {
         if (gRaceFile) {
             setvbuf(gRaceFile, nullptr, _IOFBF, 1 << 16);
             fprintf(gRaceFile, "t,car,driver_class,physics,speed_mph,dist_m,gap_m,x,y,z,gas,brake,gear,base_skill,glue_skill,"
-                               "catchup_cheat,cheat_override,cheat_age\n");
+                               "catchup_cheat,cheat_override,cheat_age,perf_top,perf_handling,perf_accel,bias_top,"
+                               "bias_handling,bias_accel,plan_top_mps,plan_grip_start,plan_grip_end,nos_capability,"
+                               "usable_nos,topspeed_mult,max_ai_speed_mps,accel_mult\n");
         }
         for (int i = 0; i < gNumCars; i++) {
             gCars[i].dist = 0.0;
@@ -151,6 +186,12 @@ static void StopRecording() {
     }
 }
 
+// Empty column instead of NAN (msvcrt prints NAN as 1.#QNAN)
+static void PutOptional(float v) {
+    if (std::isnan(v)) fputc(',', gRaceFile);
+    else fprintf(gRaceFile, ",%.4f", v);
+}
+
 // One row per car every 0.05 s of player time. Distances are integrated from each car's own speed
 // since F10, so gap_m = car distance - player distance (positive = ahead) if recording starts at the line.
 static void RaceTick(void *self, const char *s, int physics) {
@@ -163,10 +204,137 @@ static void RaceTick(void *self, const char *s, int physics) {
     if (cls == 0) gPlayerDist = c->dist;
     if (!gRaceFile || gTime - c->lastLog < 0.05) return;
     c->lastLog = gTime;
-    fprintf(gRaceFile, "%.3f,%d,%d,%d,%.2f,%.1f,%.1f,%.1f,%.1f,%.1f,%.2f,%.2f,%d,%.3f,%.3f,%.4f,%.4f,%.2f\n", gTime, c->id, cls, physics,
+    fprintf(gRaceFile, "%.3f,%d,%d,%d,%.2f,%.1f,%.1f,%.1f,%.1f,%.1f,%.2f,%.2f,%d,%.3f,%.3f,%.4f,%.4f,%.2f", gTime, c->id, cls, physics,
             F(s, 0xBC) * 2.23694f, c->dist, c->dist - gPlayerDist, F(s, 0x30), F(s, 0x34), F(s, 0x38), F(s, 0x4C), F(s, 0x5C),
             *(const short *)(s + 0xCC), c->baseSkill, c->glueSkill, c->cheat, c->cheatOverride,
             c->cheatTime < 0 ? -1.0 : gTime - c->cheatTime);
+    for (float v : c->perf) PutOptional(v);
+    for (float v : c->plan) PutOptional(v);
+    fputc('\n', gRaceFile);
+}
+
+// Copies the Performance a PVehicle was created with ([IVehicle+0xF8], valid flag at +0x104).
+// Returns false for anything that isn't a PVehicle's IVehicle or has no rating.
+static bool ReadPerf(const void *vehicle, float out[3]) {
+    const char *v = (const char *)vehicle;
+    if (!v || *(const uintptr_t *)v != gGame->vehicleVtbl || !*(const uint8_t *)(v + 0x104)) return false;
+    memcpy(out, v + 0xF8, 3 * sizeof(float));
+    return true;
+}
+
+typedef void(THISCALL *Potentials_t)(void *self);
+typedef bool(THISCALL *RaceFlag_t)(const void *params);
+
+static FILE *gPotFile = nullptr;
+static DWORD gStartTick;
+
+// One line per ComputePotentials call in potentials_<game>.csv (always on, appended): the race
+// state that picks the floor ([GRaceStatus+0x6A18] context, [+0x6A1C] parameters, the two flag
+// queries) and the bias it produced, to explain calls that come back with bias 0.
+static void LogPotentials(const void *self, const CarRec *c, uintptr_t site, const float best[3], bool haveBest) {
+    if (!gPotFile) {
+        char path[MAX_PATH];
+        snprintf(path, sizeof(path), "%spotentials_%s.csv", gDir, gGame->name);
+        gPotFile = fopen(path, "a");
+        if (!gPotFile) return;
+        fseek(gPotFile, 0, SEEK_END);
+        if (ftell(gPotFile) == 0)
+            fprintf(gPotFile, "wall_s,rec_t,site,car,race_status,context,params,flag_63D720,flag_63E180,best_top,"
+                              "best_handling,best_accel,bias_top,bias_handling,bias_accel,plan_top_mps\n");
+    }
+    const char *rs = *(const char *const *)gGame->raceStatus;
+    const void *params = rs ? *(const void *const *)(rs + 0x6A1C) : nullptr;
+    fprintf(gPotFile, "%.2f,", (GetTickCount() - gStartTick) / 1000.0);
+    if (gFile) fprintf(gPotFile, "%.3f", gTime);
+    fprintf(gPotFile, ",%s,%d,%d,%d,%d,%d,%d", site == gGame->potentialsSites[0] ? "construct" : "start", c ? c->id : -1,
+            rs != nullptr, rs ? I(rs, 0x6A18) : -1, params != nullptr,
+            params ? ((RaceFlag_t)gGame->raceFlagA)(params) : -1, params ? ((RaceFlag_t)gGame->raceFlagB)(params) : -1);
+    for (int i = 0; i < 3; i++) {
+        if (haveBest) fprintf(gPotFile, ",%.4f", best[i]);
+        else fputc(',', gPotFile);
+    }
+    fprintf(gPotFile, ",%.4f,%.4f,%.4f,%.4f\n", F(self, 0x7C), F(self, 0x80), F(self, 0x84), F(self, 0xA4));
+    fflush(gPotFile);
+}
+
+// AIActionRace::ComputePotentials runs when a race action starts. Records what the AI planned with
+// and the ratings it was computed from (its own car via [this+0x34] = IVehicle, and every player's).
+static void THISCALL HookPotentials(void *self) {
+    uintptr_t site = (uintptr_t)__builtin_return_address(0) - 5;
+    ((Potentials_t)gGame->potentialsFn)(self);
+    const char *vehicle = *(const char *const *)((const char *)self + 0x34);
+    CarRec *c = vehicle ? FindCar(*(const void *const *)(vehicle + 4)) : nullptr;
+    if (c) {
+        ReadPerf(vehicle, c->perf);
+        for (int i = 0; i < kNumPlan; i++) c->plan[i] = F(self, kPlanOffsets[i]);
+    }
+    // Best (highest) player rating per axis, as ComputePotentials' own lookup (0x420F00) takes it
+    float best[3] = {0.0f, 0.0f, 0.0f};
+    bool haveBest = false;
+    const char *const *players = *(const char *const *const *)gGame->playersBegin;
+    int count = *(const int *)gGame->playersCount;
+    for (int i = 0; players && i < count; i++) {
+        if (!players[i]) continue;
+        float perf[3];
+        if (!ReadPerf(players[i], perf)) continue;
+        for (int k = 0; k < 3; k++) best[k] = haveBest ? fmaxf(best[k], perf[k]) : perf[k];
+        haveBest = true;
+        if (CarRec *p = FindCar(*(const void *const *)(players[i] + 4))) memcpy(p->perf, perf, sizeof(perf));
+    }
+    LogPotentials(self, c, site, best, haveBest);
+}
+
+typedef bool (*Estimate_t)(const void *vehicle, float *out);
+typedef void *(THISCALL *VehicleCtor_t)(void *self, uintptr_t cls, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5,
+                                        uintptr_t a6, uintptr_t a7, const float *matched, uintptr_t a9);
+
+static FILE *gVehFile = nullptr;
+static const float *gLastEstimate = nullptr;
+static uintptr_t gCodeLo, gCodeHi;
+
+// Physics::Info estimate the factory uses when VehicleParams carries no rating (flag 0x8)
+static bool HookEstimate(const void *vehicle, float *out) {
+    bool ok = ((Estimate_t)gGame->estimateFn)(vehicle, out);
+    gLastEstimate = ok ? out : nullptr;
+    return ok;
+}
+
+// One line per PVehicle in vehicles_<game>.csv (always on, appended): driver class, where its
+// Performance rating came from (explicit = VehicleParams+0x34 from the creator, estimated, none),
+// the rating, and the return addresses of direct calls found on the stack (who created it).
+static void *THISCALL HookVehicleCtor(void *self, uintptr_t cls, uintptr_t a2, uintptr_t a3, uintptr_t a4, uintptr_t a5,
+                                      uintptr_t a6, uintptr_t a7, const float *matched, uintptr_t a9) {
+    const char *source = !matched ? "none" : matched == gLastEstimate ? "estimated" : "explicit";
+    float perf[3] = {NAN, NAN, NAN};
+    if (matched) memcpy(perf, matched, sizeof(perf));
+    gLastEstimate = nullptr;
+    void *result = ((VehicleCtor_t)gGame->vehicleCtor)(self, cls, a2, a3, a4, a5, a6, a7, matched, a9);
+
+    if (!gVehFile) {
+        char path[MAX_PATH];
+        snprintf(path, sizeof(path), "%svehicles_%s.csv", gDir, gGame->name);
+        gVehFile = fopen(path, "a");
+        if (!gVehFile) return result;
+        fseek(gVehFile, 0, SEEK_END);
+        if (ftell(gVehFile) == 0) fprintf(gVehFile, "wall_s,class,key,source,perf_top,perf_handling,perf_accel,callers\n");
+    }
+    const char *vehicle = (const char *)self + 0xB8;  // IVehicle subobject
+    fprintf(gVehFile, "%.2f,%u,%p,%s", (GetTickCount() - gStartTick) / 1000.0, (unsigned)cls, *(void *const *)(vehicle + 4), source);
+    for (float v : perf) {
+        if (std::isnan(v)) fputc(',', gVehFile);
+        else fprintf(gVehFile, ",%.4f", v);
+    }
+    fputc(',', gVehFile);
+    const uintptr_t *sp = (const uintptr_t *)__builtin_frame_address(0);
+    const uintptr_t *top = (const uintptr_t *)((const NT_TIB *)NtCurrentTeb())->StackBase;
+    for (int found = 0; sp < top && found < 8; sp++) {
+        uintptr_t v = *sp;
+        if (v < gCodeLo + 5 || v >= gCodeHi || *(const uint8_t *)(v - 5) != 0xE8) continue;
+        fprintf(gVehFile, "%s%X", found++ ? " " : "", (unsigned)v);
+    }
+    fputc('\n', gVehFile);
+    fflush(gVehFile);
+    return result;
 }
 
 static void PollHotkey() {
@@ -293,11 +461,26 @@ static void Install() {
 
     // Only take over the catch-up slot if it still holds the game's function (ExtraOptions'
     // NoCatchUp replaces it; then we leave it alone and the cheat columns stay empty).
-    if (gGame->cheatSlot && *(const uintptr_t *)gGame->cheatSlot == gGame->cheatFn) {
-        DWORD old;
-        VirtualProtect((void *)gGame->cheatSlot, 4, PAGE_READWRITE, &old);
-        *(uintptr_t *)gGame->cheatSlot = (uintptr_t)&HookCheat;
-        VirtualProtect((void *)gGame->cheatSlot, 4, old, &old);
+    for (uintptr_t slot : gGame->cheatSlots)
+        if (slot && *(const uintptr_t *)slot == gGame->cheatFn) {
+            DWORD old;
+            VirtualProtect((void *)slot, 4, PAGE_READWRITE, &old);
+            *(uintptr_t *)slot = (uintptr_t)&HookCheat;
+            VirtualProtect((void *)slot, 4, old, &old);
+        }
+
+    if (gGame->potentialsFn)
+        for (uintptr_t site : gGame->potentialsSites)
+            if (CallTargets(site, gGame->potentialsFn)) RedirectCall(site, (void *)&HookPotentials);
+
+    if (gGame->vehicleCtorSite && CallTargets(gGame->vehicleCtorSite, gGame->vehicleCtor) &&
+        CallTargets(gGame->estimateSite, gGame->estimateFn)) {
+        const char *base = (const char *)GetModuleHandleA(nullptr);
+        const IMAGE_NT_HEADERS *nt = (const IMAGE_NT_HEADERS *)(base + ((const IMAGE_DOS_HEADER *)base)->e_lfanew);
+        gCodeLo = (uintptr_t)base + nt->OptionalHeader.BaseOfCode;
+        gCodeHi = gCodeLo + nt->OptionalHeader.SizeOfCode;
+        RedirectCall(gGame->estimateSite, (void *)&HookEstimate);
+        RedirectCall(gGame->vehicleCtorSite, (void *)&HookVehicleCtor);
     }
 }
 
@@ -312,9 +495,12 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
         if (slash) slash[1] = 0;
 
         gVKey = GetPrivateProfileIntA("GripTelemetry", "ToggleKey", VK_F10, ini);
+        gStartTick = GetTickCount();
         Install();
     } else if (reason == DLL_PROCESS_DETACH) {
         StopRecording();
+        if (gPotFile) fclose(gPotFile);
+        if (gVehFile) fclose(gVehFile);
     }
     return TRUE;
 }

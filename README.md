@@ -15,7 +15,8 @@ so if a patch seems to have no effect, compare your exe's size and hash first.
 | `MWCamPatch` | MW chase camera: the eye swings in toward the car under braking; Carbon's brake damping removed | `RestoreEyeSwing`, `SkipBrakeDamping` |
 | `MWTachPatch` | Needle shows audio RPM (smooth upshifts); redline shake at MW speed regardless of SimRate | `UseAudioRPM`, `SmoothRedlineShake`, `RedlineBounce` |
 | `MWGripPatch` | MW lateral grip scale (about 1.2 at speed), throttle force ellipse, launch wheelspin, Carbon-only hacks removed | `RestoreGripScale`, `RestoreThrottleEllipse`, `RemoveBurnoutHack`, `RestoreBurnoutTraction`, `RemovePitchRollScaling` |
-| `GripTelemetry` | F10 records the player's handling (`grip_*.csv`) and, in Carbon, every racer (`race_*.csv`). Works in MW and Carbon | `ToggleKey` |
+| `AIBalance` | Configurable floor for the AI performance bias (Carbon hardcodes 0.75 in career, 1.0 elsewhere), so the AI scales with a weak player car | `CareerFloor`, `CareerFloorAlt`, `OtherFloor` |
+| `GripTelemetry` | F10 records the player's handling (`grip_*.csv`) and, in Carbon, every racer (`race_*.csv`, including catch-up and AI performance-bias state). Works in MW and Carbon | `ToggleKey` |
 
 Install: copy the `.asi` (plus an optional `.ini` with the same name) into the game's `scripts` folder. This needs the
 Ultimate ASI Loader (`dinput8.dll`). Settings that worked (all 1 except `RemovePitchRollScaling` and `RedlineBounce`) are
@@ -36,6 +37,7 @@ listed in each `.cpp` header and the notes.
 ```bash
 # Linux (Debian/Ubuntu: apt install g++-mingw-w64-i686 · Fedora: mingw32-gcc-c++ · Arch: mingw-w64-gcc)
 cd prototype
+i686-w64-mingw32-g++ -shared -O2 -static -s -o AIBalance.asi AIBalance.cpp
 i686-w64-mingw32-g++ -shared -O2 -static -s -o GripTelemetry.asi GripTelemetry.cpp
 i686-w64-mingw32-g++ -shared -O2 -static -s -o MWCamPatch.asi MWCamPatch.cpp
 i686-w64-mingw32-g++ -shared -O2 -static -s -masm=intel -o MWGripPatch.asi MWGripPatch.cpp
