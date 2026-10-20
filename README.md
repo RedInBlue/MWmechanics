@@ -15,7 +15,7 @@ so if a patch seems to have no effect, compare your exe's size and hash first.
 | `MWCamPatch` | MW chase camera: the eye swings in toward the car under braking; Carbon's brake damping removed | `RestoreEyeSwing`, `SkipBrakeDamping` |
 | `MWTachPatch` | Needle shows audio RPM (smooth upshifts); redline shake at MW speed regardless of SimRate | `UseAudioRPM`, `SmoothRedlineShake`, `RedlineBounce` |
 | `MWGripPatch` | MW lateral grip scale (about 1.2 at speed), throttle force ellipse, launch wheelspin, Carbon-only hacks removed | `RestoreGripScale`, `RestoreThrottleEllipse`, `RemoveBurnoutHack`, `RestoreBurnoutTraction`, `RemovePitchRollScaling` |
-| `AIBalance` | Configurable floor for the AI performance bias (Carbon hardcodes 0.75 in career, 1.0 elsewhere), so the AI scales with a weak player car | `CareerFloor`, `CareerFloorAlt`, `OtherFloor` |
+| `AIBalance` | Career AI tuning: configurable or player-relative floor for the AI performance bias (Carbon hardcodes 0.75 in career), a clamp on the career adaptive difficulty that sets generic opponents' skill, the catch-up strength curves (stock fades out late in the race), and AI engine torque scaled to your car | `CareerFloor`, `CareerFloorAlt`, `OtherFloor`, `RelativeMargin`, `AdaptiveMin`, `AdaptiveMax`, `CatchUpCapLow`, `CatchUpCapHigh`, `CatchUpSpreadLow`, `CatchUpSpreadHigh`, `CatchUpTorque`, `TorqueMatch` |
 | `GripTelemetry` | F10 records the player's handling (`grip_*.csv`) and, in Carbon, every racer (`race_*.csv`, including catch-up and AI performance-bias state). Works in MW and Carbon | `ToggleKey` |
 
 Install: copy the `.asi` (plus an optional `.ini` with the same name) into the game's `scripts` folder. This needs the
@@ -27,7 +27,8 @@ listed in each `.cpp` header and the notes.
 - [MW_Camera_Port_Research.md](MW_Camera_Port_Research.md): camera (`CubicCameraMover` lag tables)
 - [MW_Tach_Notes.md](MW_Tach_Notes.md): tachometer (DAL RPM, `SoundCar`, redline bounce timing)
 - [MW_Grip_Notes.md](MW_Grip_Notes.md): tire model, steering, launch, `DoWheelForces`, and the comparison recordings
-- [MW_AI_Notes.md](MW_AI_Notes.md): AI difficulty (catch-up / glue, `aivehicle` multipliers). **Work in progress.**
+- [MW_AI_Notes.md](MW_AI_Notes.md): AI difficulty (performance bias, catch-up / glue, skill, racer creation). **Work in progress.**
+- [AI_Rebalance_Plan.md](AI_Rebalance_Plan.md): proposed career AI rebalance (phases, levers, open questions)
 - `Restore_Stock_LATERAL_GRIP.nfsms`: stock surface grip values (from the CE disc)
 
 ## Building

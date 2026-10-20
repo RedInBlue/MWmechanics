@@ -59,32 +59,31 @@ is rated 1.0 on all axes, so each AI plans at `p + (1 − p) × bias` = 0.75 on 
 and a 111.1 m/s (400 km/h) cap, not the reported 0 / 0.2. The player car also runs `ComputePotentials` (it has an
 AIActionRace too), so the human row shows bias and plan values; ignore them.
 
-**A/B test, same early career event** (`race_Carbon_20261019_185751.csv` stock, `..._190443.csv` fully upgraded):
+**Test event:** `race_bin_santafe/1_5_4` (`sf.5.4`, LocalizationTag 282), a 2-lap, 5.3 km circuit in Santa Fe with six
+`character_racy` opponents, plus the wingman. The user knows it as Salazar Street in the Battle Royale install. It was
+identified from the recorded start position: race CSV `(x, z)` = game `(−Y, X)`, so start (−1790, −2300) is
+`startgrid` (−2290.5, 1790.2).
 
-| | player `p` (top/handling/accel) | AI bias | AI planned top speed | result |
+**A/B runs** (all stock-floor runs used `CareerFloor` 0.75 unless noted):
+
+| run | player `p` (top/handling/accel) | AI bias | AI planned top speed | at the finish line |
 |---|---|---|---|---|
-| stock | 0.30 / 0.39 / 0.18 | 0.64 / 0.59 / 0.70 | 94.6–103.5 m/s | 4 AIs 300–530 m ahead at 215 s |
-| upgraded | 0.84 / 0.93 / 0.96 | 0 / 0 / 0 | 101.6–115.7 m/s | 6 of 7 AIs 630–920 m behind at 80 s |
+| stock, 0.75 (`..._185751`) | 0.30 / 0.39 / 0.18 | 0.64 / 0.59 / 0.70 | 94.6–103.5 m/s | not checked (file deleted) |
+| maxed, 0.75 (`..._190443`) | 0.84 / 0.93 / 0.96 | 0 / 0 / 0 | 101.6–115.7 m/s | recording stopped about 2 s before the finish; player leading, wingman 31 m back, others 630–920 m |
+| stock, 0.5 (`..._191818`) | 0.30 / 0.39 / 0.18 | 0.29 / 0.18 / 0.39 | 90.6–92.0 m/s | **player first**: wingman 55 m back, others 170–300 m; individual AIs led for 16–47% of the race |
+| maxed, 0.5 (`..._192942`) | 0.84 / 0.93 / 0.96 | 0 / 0 / 0 | 103.9–115.7 m/s | player first, AIs 110–470 m back, never led |
 
-- Upgrades do change `p`, so `matched` is computed from the tuned car (tracing who supplies it is no longer needed).
-- With the upgraded car the AI plans with `min(its car, yours)` = its own car on almost every axis: it is driving at full
-  potential and simply has the slower car. With the stock car it is held at 75% of the way from your car to its own.
-- The stock player has no NOS (`nos_capability` 0) but every AI got 0.70 of its own: `Lerp(0, 1, bias)`.
-- **AI resets drop the bias to 0.** Cars 1 and 4 in the stock run were repositioned (a 200 m jump at 108 s; stuck for 3 s and
-  moved at 140 s). `ComputePotentials` ran again and came back with bias 0, so they planned at the player's level for the
-  rest of the race and finished last. `0x420F00` (best player performance) is a plain max over the player list with no
-  filter, so the 0 probably comes from the no-race-parameters branch (`[GRaceStatus+0x6A1C]` null at that moment). Unconfirmed.
-  **Settled by `potentials_Carbon.csv`:** in both later runs every car, the player included, jumped 120–275 m forward at the
-  same instant and the same place (around x −1788, z −2300; 112.1 s into the stock run, 81.9 s into the upgraded one), with
-  5–6 s of wall time where the player's physics didn't tick. From that moment `[GRaceStatus+0x6A1C]` stays null for the
-  rest of the race, so every later `ComputePotentials` takes the zero branch: any AI whose race action restarts after
-  that point plans at `min(its car, yours)`. The first stock run's resets happened at the same spot. The player crashed
-  into traffic there in both runs; the "jump" is just everyone driving on for 5–6 s while the player's SuspensionRacer
-  wasn't ticking (the race log's clock only advances on player ticks), and the player's own race action was rebuilt.
-  Why the crash leaves `+0x6A1C` null is not known.
-- One AI in the upgraded run (car 15) stayed 30–220 m behind the player and hit 206–225 mph while the others topped out at
-  170–187, which looks like catch-up. The catch-up columns were empty because racers don't use the vtable that was hooked
-  (see Catch-up below).
+- Upgrades change `p` (it's estimated from the car's parts).
+- With the maxed car the bias is 0, and `min(its car, yours)` is the AI's own car on almost every axis: the AI drives at full
+  potential and is beaten on car and skill (0.6).
+- The stock player has no NOS (`nos_capability` 0) but every AI got `Lerp(0, 1, bias)` of its own.
+- **Correction:** the "jump" that every car made at the same point (112.0 s stock, 81.9 s maxed; 108 s in the first stock
+  run) is the **player crossing the finish line**. The finish hands the player's car to its AI (the player's race action is
+  rebuilt, 5–6 s pass without SuspensionRacer ticks, so the log clock stops), and `[GRaceStatus+0x6A1C]` stays null
+  afterwards, so AIs that restart after the finish plan with bias 0. That's post-race, so it's harmless. Earlier
+  "AI finished 300–1500 m ahead" figures were measured after the finish, while the player was on autopilot and the AIs
+  kept racing; they're wrong. Also, `gap_m` integrates speed, so it's only meaningful up to the finish.
+- The wingman (Sal; car 15 in the first maxed run, car 1 in the 0.5 stock run) runs on the catch-up override (below).
 
 **Where `p` comes from:** `PVehicle::GetPerformance` (IVehicle vtable 0x9E4A78, slot `+0xE8` = 0x6D8170) returns a copy cached in
 the constructor (IVehicle `+0xF8..+0x100`, valid byte `+0x104`; the IVehicle subobject is at `PVehicle+0xB8`). The value is the
@@ -109,10 +108,76 @@ PerformaTor's standalone `operator()` (0x416900) is unreferenced; the copy actua
 | glue when 0x63E120 is true 0xA4C284 / 0xA4C298 (else, if 0x404310 is true, × 0.5 both ways, like MW's speed trap) | {0.25, 0.66, 1} / {1, 0.2, 0.2} | none |
 | catch-up cheat 0xA4C2AC | {0.5, 0.5, 0.5} | same |
 
-**Floor 0.5 test** (`race_Carbon_20261019_191818.csv`, stock car, `CareerFloor=0.5`): bias came out at exactly
-0.2892 / 0.1750 / 0.3910 as predicted, and planned top speed dropped from 94.6–103.5 to 90.6–92.0 m/s and end grip from
-7.3–9.6 to 6.0–6.5. AI average speed barely moved (94–105 mph against 91–102 at 0.75), and they still finished 640–1500 m
-ahead. The plan limits aren't what makes the AI fast against the stock car.
+**Matching runs** (sf.5.4; finish where `race_active` drops):
+
+| run | adaptive at start | AI skill | AI bias | AI planned top speed | result | AI lead share |
+|---|---|---|---|---|---|---|
+| control: stock car, stock floor (`..._201116`) | 0.583 | 0.753 | 0.64 / 0.59 / 0.70 | 101–106 m/s | player won; AIs 15–172 m behind | cars 4 and 7 led 99% until lap 2 |
+| stock car, `RelativeMargin` 0.15 (`..._201646`) | 0.210 | 0.451 | 0.21 / 0.25 / 0.18 (as predicted) | 86–89 m/s | player about 6th; 5 AIs ahead by 0.5–181 m | 16–98% |
+| maxed car, `RelativeMargin` 0.15 (`..._202216`) | 0.582 | 0.753 | 0.94 / 1 / 1 | 94–116 m/s | player won by 139–511 m; wingman 37 m **ahead** | 0% |
+
+- **The adaptive value swings between consecutive races** (0.58 → 0.21 → 0.58), and AI skill swings with it (0.75 → 0.45 → 0.75).
+  The fit is skill ≈ 0.28 + 0.81 × adaptive, so the base isn't 0. Which result moves it which way isn't clear yet: here it
+  dropped after a win and rose after a loss, but restarts may count too. The skill difference makes the two stock runs only
+  roughly comparable.
+- **Slow-down glue is severe.** An AI 100 m or more ahead gets `glue_skill` about −0.64, so its effective skill
+  (`base + glue`, clamped) is about 0.12 for as long as it leads (car 7 in the control run: 0.12 from 10 s to 80 s).
+  Trailing AIs get +0.62 (effective 1.0) and catch-up cheat 0.19 (+14% torque).
+- **Leaders slow down in lap 2 beyond the glue.** Control run, average mph per 250 m section:
+  - car 7: 115 in lap 1, 99 in lap 2 (−14%), even though its average effective skill *rose* from 0.17 to 0.31;
+  - car 4: −4%;
+  - car 2, which spent time behind and got catch-up, was +6%.
+  No `ComputePotentials` re-runs happened mid-race. Candidates: NOS running out (the catch-up cheat also speeds up AI NOS
+  recharge, and leaders have cheat 0), and cops (`CopsInRace` is true in sf.5.4, `CopDensity` 70). Needs NOS and pursuit
+  telemetry.
+- **Catch-up fades out late, by design.** `GRaceStatus::ComputeCatchUpSkill` (0x643100, `ret 0x14`) has two modes. If the event
+  sets `CatchUpOverride` (0x63EB20), it uses the event's `CatchUpSkill` / `CatchUpSpread` curves (+0xBBF0.., +0xBC20..,
+  integral/derivative gains +0xBBE0/+0xBBE4). Otherwise, the default used by sf.5.4, it uses built-in tables over race
+  progress x = `[racer info+0x3C]` (0..100), blended by A = clamp((adaptive + 1) × 0.5, 0, 1):
+  - spread = Lerp(0xA61130 {1000, 900, 750, 750, 800}, 0xA61144 {300, 275, 250, 150, 250}, A) metres (at least 100);
+  - cap = Lerp(0xA61158 {0.75, 0.75, 0.75, 0.5, 0}, 0xA6116C {0.75, 0.75, 0.75, 0.75, 0.25}, A);
+  - glue = clamp(2 × error / spread + integral + derivative, −1, 1) × cap. Carbon then applies the catch-up glue table by
+    base skill (≈ 0.83 at 0.75), so the measured +0.62 peak = 0.75 × 0.83.
+  The cap falls over the last 25% of the race (to 0.20 at the finish with adaptive 0.58, and to 0 at −1), so trailing AIs
+  stop catching up during lap 2 of a 2-lap race. That's the "AI can't catch the maxed car after lap 1" symptom, and why it
+  depends on the adaptive value. The torque cheat (`clamp(base + glue − 1) × 0.5`, at most 0.19 = +14% torque here) fades with it.
+  `AIBalance` `CatchUpCapLow` / `CatchUpCapHigh` / `CatchUpSpreadLow` / `CatchUpSpreadHigh` / `CatchUpTorque` rewrite these
+  tables.
+- **The maxed car outruns AIs at full potential and full skill.** Effective skill 1.0 plus the catch-up torque isn't
+  enough; the AI never led.
+- **`CatchUpCap` 0.75 and adaptive pinned at 0.6, maxed car (`..._203908`):** the glue held 0.63 and the cheat 0.20 right to
+  the finish, and the late fade was gone. Trailing AIs stopped losing ground in lap 2 (car 2: −752 m at 60 s, −723 m at 80 s;
+  car 5 finished 13 m back), but none could close. AI skill 0.767.
+- **`TorqueMatch` 0.5, stock car (`..._205522`, otherwise as `..._204257`):** normal AIs' full-throttle acceleration fell
+  about 30% (90–110 mph: 9–10 mph/s, from 12–16), while the wingman's override kept him at about 17. The player won by
+  166–448 m (Sal finished 59 m ahead) and the AIs led 9–31% of the race.
+- **`CatchUpTorque` 1.0, maxed car (`..._205917`, otherwise as `..._203908`):** the trailing cheat rose to 0.40 (+30% torque) and
+  AI acceleration above 130 mph rose. Trailing AIs lost 28 m on average in lap 2 (73 m before), but the gap opens in lap 1
+  (300–480 m by half distance): the maxed car pulls about 36 mph/s at 50–70 mph against the AI's 23, and with a spread of
+  about 440 m the glue only reaches full strength once an AI is roughly 200 m back. Traffic hits were rare (0–2 sudden
+  non-braking losses per car). Hence `CatchUpSpread`.
+- **`RelativeMargin` 0.05 and adaptive 0.2, stock car (`..._204257`):** bias 0.07 / 0.08 / 0.06, skill 0.442. The player
+  finished third (Sal +48 m, car 7 +37 m); the other AIs were 84–219 m behind and led 9–34% of the race.
+- **AI racers always run SuspensionSimple** (`physics` 2 on every row, even alongside the player), and they accelerate far
+  harder than the stock car whatever the bias. Median-to-upper full-throttle mph/s:
+  - 70–90 mph: player stock 5–6, AIs 13–19;
+  - 90–110 mph: 4 against 12–19;
+  - 110–130 mph: 3.5 against 10–17.
+  The maxed player car is 31 / 21 / 17 in those bands, and Sal at +75% torque reaches 28–33. AI acceleration was the same
+  in the control run (bias 0.64) and the 0.05 run (bias 0.07), so the plan limits don't touch it. It's the AI car itself.
+- **Where the catch-up cheat goes** (engine and suspension use the `ICheater` stored at `+0x110` / `+0xDC`):
+  - engine torque × (1 + 0.75 × cheat) at 0x7007CF; constant 0x9C2D70 = 0.75, so the earlier "× 0.5" was wrong;
+  - NOS drain × (1 − 0.5 × cheat) at 0x6E4015, and recharge × (1 + cheat) at 0x6E414E;
+  - SuspensionSimple 0x7047D3 passes (1 − cheat) and (1 + 0.5 × cheat) to 0x6DEBB0;
+  - SuspensionRacer (racer class only, 0x6FCB76) uses 0.23 + 0.27 × cheat.
+  Nothing clamps it, so a negative value cuts torque. `AIBalance` `TorqueMatch` replaces the 5-byte `mov eax,[ecx]; call
+  [eax+4]` at 0x7007D9 with a call that subtracts `TorqueMatch × (1 − best player Acceleration rating)` for
+  `AIVehicleRacecar` cheaters (vtable 0x9C4D40) in career, unless the override at `+0x54` is active (the wingman). The
+  floor is −1, so torque never goes below 25%.
+
+**Floor 0.5 test:** see the A/B table. The bias came out at exactly the predicted values. With the stock car the race
+became close, and the player won, but there's no valid 0.75 control yet (that run's file was deleted before the finish
+line was checked). Repeat it before drawing conclusions.
 
 **The AI cars are about as strong as your fully upgraded one.** Every AI car is rated exactly 1.0 / 1.0 / 1.0. Working back
 from `plan = min + (own − min) × bias`, their own potentials are about 101–116 m/s top speed and 2.0–2.1 / 8.9–10.9 g grip.
@@ -123,7 +188,7 @@ Where the rating comes from: the PVehicle factory (constructor call at 0x6DAE34,
 pointer is its 8th argument) uses `VehicleParams+0x34` if the creator set it, otherwise (flag 0x8 in `+0x38`) estimates it
 from the car and its parts with 0x6CE330, otherwise none. The player's rating changes with upgrades, so it's an estimate.
 GripTelemetry now logs every vehicle's source and rating, plus the call chain from the stack, in `vehicles_Carbon.csv`.
-**Answered (`vehicles_Carbon.csv`, Salazar Street, a Collector's Edition race that Battle Royale reuses as a career event):**
+**Answered (`vehicles_Carbon.csv`, `sf.5.4`):**
 the player's rating is `estimated`; all seven racers' is `explicit` 1.0 / 1.0 / 1.0. The racer creator (around 0x629C00,
 return address 0x629E8E) hardcodes it: it stores 1.0 three times on the stack (0x629DA7–0x629DB7) and passes that pointer
 as `matched` to the VehicleParams constructor 0x4048A0. That's stock exe code, not the mod. As far as traced, an AI's own
@@ -131,11 +196,33 @@ rating isn't read by `ComputePotentials` (best *player* only) or the glue (playe
 about how strong the AI car is.
 
 The car itself: in career (`[GRaceStatus+0x6A18] == 3`) the creator takes a preset ride name from the opponent's record
-(`[racer info+0x1D0]`, read at 0x629CCC; MW's `gameplay` class has the same `PresetRide` field) and builds the
-customization from it (0x7C2F70 finds the preset, then 0x7D6EE0 / 0x7E1880 / 0x7C4040). Outside career, or if there's no
-preset, it uses `QR_AI_SKIN_<1..20>`. So the AI cars' near-maxed strength comes from the **event data**: the opponents'
-preset rides (their performance parts) in the Battle Royale database, not from code. That alone explains both halves of the symptom: the stock car is outclassed, and the maxed
-car is level with the AI cars while the AI drives them at skill 0.6.
+(`[racer info+0x1D0]`, read at 0x629CCC) and builds the customization from it (0x7C2F70 finds the preset, then 0x7D6EE0 /
+0x7E1880 / 0x7C4040). With no preset it falls back to `QR_AI_SKIN_<(a + b) % 20 + 1>` (format string 0x9D87C8).
+
+**Event data (BR database, read-only YAML export of a copy via Attribulator `unpack`):** almost every Santa Fe career event
+uses `character_racy` opponents (`SkillLevel 0`, no `PresetRide`, no `CarType`, `MinimumAIPerformance 0`) and inherits
+`DifficultyLevel 100`, `CatchUp true`, `CatchUpSkill 0.2` and `PlayerCarPerformance 1` from `race` / `basicrace`. The only
+exceptions are story and test-drive races (sf.1.1 test drives at skill 40, sf.2.1 at `DifficultyLevel 40` with skill-60
+Sal presets, sf.6.4 against `character_weak`, bosses). So these opponents use the `QR_AI_SKIN` fallback, which is a visual
+preset. The `presetride` VLT (performance part levels 0–10) has no `QR_AI_SKIN` entries, so their **car model and
+performance parts come from somewhere else that hasn't been found yet**. Measured strength is on par with the player's
+maxed car.
+
+**Difficulty and skill in career:**
+- `GRaceParameters::GetDifficulty` (0x63C5C0) buckets `DifficultyLevel` into 0 (< 34), 1 (34–66) or 2 (≥ 67), but
+  `ComputeSkill` only uses it for quick race (tables 0x9C1B90 / 0x9C1B9C).
+- Career skill = `clamp(SkillLevel × 0.01 + adaptive × table(base))`, with the up table {0.7, 0.9, 1} when adaptive > 0 and
+  the down table {0.5, 0.2, 0.2} otherwise.
+- `adaptive` is `GRaceStatus+0xBBE8` (0x6127D0). It's loaded from persistent career stat 6000 (0x6127F0) and rewritten
+  after each career race by the result code at 0x6429C0–0x642F13 (margins, clamped to −1..1). The career catch-up skill
+  (0x643131) also scales with `(adaptive + 1)`.
+- With `character_racy`'s `SkillLevel 0`, AI skill comes entirely from this: the measured 0.597 = 0.853 × 0.7. So the
+  career's adaptive difficulty, which is persisted in the save, decides how well every generic opponent drives.
+
+**`AIBalance.asi` `RelativeMargin`** redirects `ComputePotentials`' three `Ramp` calls (0x42F5F6 acceleration → `+0x84`,
+0x42F60C handling → `+0x80`, 0x42F622 top speed → `+0x7C`). In career, when the floor passed in is one of the two career
+immediates, it uses `rating + margin` instead. **`AdaptiveMin/Max`** redirects ComputeSkill's only call to 0x6127D0
+(0x40A963) and clamps the result.
 
 **`AIBalance.asi`** makes the floors configurable (`CareerFloor`, `CareerFloorAlt`, `OtherFloor`): it rewrites the immediates of
 the `mov [esp+0x10], imm32` at 0x42F573 (0.75), 0x42F569 (0.7) and 0x42F57D (1.0, shared by non-career and the 0x63E180
@@ -149,7 +236,7 @@ career case). Restoring MW's per-opponent `MinimumAIPerformance` would need the 
 - Skill = `clamp(fBaseSkill + fGlueSkill)`. `fBaseSkill` comes from the difficulty setting and the opponent's character skill (adaptive up/down tables).
 - Carbon keeps the performance ratio unchanged (glue function 0x430920, at 0x430B0D: `(1 − p.TopSpeed) × 0.5 + 1`, only when the
   player's `GetPerformance` succeeds), so a weak player car gets up to 1.5× glue on top of the bias above.
-- `GetCatchupCheat = clamp(base + glue − 1, 0, 1) × 0.5`, which becomes AI engine torque × `(1 + cheat × 0.5)` (up to +25%) plus faster NOS recharge.
+- `GetCatchupCheat = clamp(base + glue − 1, 0, 1) × 0.5`. In Carbon the engine applies it as torque × `(1 + 0.75 × cheat)` (up to +37.5%; the wingman's override at 1.0 gives +75%), plus NOS changes.
 
 **Carbon:**
 - `GetCatchupCheat` is at 0x40AE80. It's the same formula and the same 0.5 table (0xA4C2AC), **plus** a Carbon-only
@@ -162,7 +249,7 @@ career case). Restoring MW's per-opponent `MinimumAIPerformance` would need the 
   didn't move between attempts). `glue_skill` ranges −0.71 to +0.54, so the normal cheat peaks at
   (0.597 + 0.544 − 1) × 0.5 = 0.07 (+3.5% torque): weak. One racer per race used the override instead: 0.25–1.0 while it
   stayed within about ±50 m of the stock player for 100 s, and a constant 1.0 from 5 s in the upgraded run while it fell
-  519 m behind. That's the wingman (Neville was in both races; `AIActionRaceWingman`, `AIGoalWingmanRacer`). The writer
+  519 m behind. That's the wingman (Sal was in both races; `AIActionRaceWingman`, `AIGoalWingmanRacer`). The writer
   isn't traced yet.
 - ExtraOptions' `NoCatchUp` only patches 0x9C4ABC (its ASI contains that address but not 0x9C4D44), so it most likely
   leaves career racers' catch-up untouched.
@@ -179,6 +266,8 @@ career case). Restoring MW's per-opponent `MinimumAIPerformance` would need the 
 - **Performance columns:** `perf_top/handling/accel` is each car's own `GetPerformance` rating (empty if it has none; the human
   row is the `p` the AI used). AI rows also get `bias_*`, `plan_top_mps`, `plan_grip_start/end`, `nos_capability`, `usable_nos`,
   `topspeed_mult`, `max_ai_speed_mps`, `accel_mult`, as last computed by `ComputePotentials`.
+- **Race CSV extras:** `race_active` (`[GRaceStatus+0x6A1C]` set; drops to 0 when the player finishes) and `adaptive`
+  (`GRaceStatus+0xBBE8`).
 - **`potentials_Carbon.csv`** (always on, appended): one line per `ComputePotentials` call with the call site (`construct` =
   0x436005 in the action constructor, `start` = 0x4361E9), the car, `[GRaceStatus+0x6A18]`, whether `+0x6A1C` is set, both
   flag queries, the best player rating, and the bias and planned top speed that came out.

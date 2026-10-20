@@ -163,7 +163,7 @@ static void StartRecording() {
             fprintf(gRaceFile, "t,car,driver_class,physics,speed_mph,dist_m,gap_m,x,y,z,gas,brake,gear,base_skill,glue_skill,"
                                "catchup_cheat,cheat_override,cheat_age,perf_top,perf_handling,perf_accel,bias_top,"
                                "bias_handling,bias_accel,plan_top_mps,plan_grip_start,plan_grip_end,nos_capability,"
-                               "usable_nos,topspeed_mult,max_ai_speed_mps,accel_mult\n");
+                               "usable_nos,topspeed_mult,max_ai_speed_mps,accel_mult,race_active,adaptive\n");
         }
         for (int i = 0; i < gNumCars; i++) {
             gCars[i].dist = 0.0;
@@ -210,6 +210,11 @@ static void RaceTick(void *self, const char *s, int physics) {
             c->cheatTime < 0 ? -1.0 : gTime - c->cheatTime);
     for (float v : c->perf) PutOptional(v);
     for (float v : c->plan) PutOptional(v);
+    // Race parameters go away when the player finishes (gaps after that are meaningless); career
+    // adaptive difficulty (GRaceStatus+0xBBE8), the source of generic opponents' skill
+    const char *rs = *(const char *const *)gGame->raceStatus;
+    fprintf(gRaceFile, ",%d", rs && *(const void *const *)(rs + 0x6A1C) ? 1 : 0);
+    PutOptional(rs ? F(rs, 0xBBE8) : NAN);
     fputc('\n', gRaceFile);
 }
 
