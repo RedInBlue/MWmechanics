@@ -224,6 +224,11 @@ maxed car.
 immediates, it uses `rating + margin` instead. **`AdaptiveMin/Max`** redirects ComputeSkill's only call to 0x6127D0
 (0x40A963) and clamps the result.
 
+**`AIBalance.asi` scaling:** `CarStrength` = clamp((mean of the best player's three ratings − `RatingWeak`) /
+(`RatingStrong` − `RatingWeak`), 0, 1). The margin in `RelativeRamp` and the adaptive value returned at 0x40A963 become
+Lerp(AtWeak, AtStrong, strength) and are read at race start (`ComputePotentials`, `ComputeSkill`). The stock starter
+(mean 0.29) and the maxed car (0.91) sit at the two ends with the shipped 0.3 / 0.9.
+
 **`AIBalance.asi`** makes the floors configurable (`CareerFloor`, `CareerFloorAlt`, `OtherFloor`): it rewrites the immediates of
 the `mov [esp+0x10], imm32` at 0x42F573 (0.75), 0x42F569 (0.7) and 0x42F57D (1.0, shared by non-career and the 0x63E180
 career case). Restoring MW's per-opponent `MinimumAIPerformance` would need the character record instead of a constant.

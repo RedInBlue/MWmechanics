@@ -66,7 +66,12 @@ The cause is that Carbon's catch-up cap fades over the last quarter of the race,
 - [x] Stock car, `TorqueMatch` 0.5: AI acceleration −30%; player won by 166–448 m.
 - [x] Maxed car, `CatchUpTorque` 1.0: +30% torque when trailing; less lap-2 loss, but the gap opens in lap 1.
 - [ ] `CatchUpSpreadLow` / `CatchUpSpreadHigh` about 150 m on both cars, so catch-up and slow-down react to small gaps.
-- [ ] Then settle on one config for both cars.
+- [x] Spread 150: maxed car won by 190–635 m (felt good); stock car won comfortably (ideal for starter events).
+- [x] One config for both: `MarginAtWeak/Strong` and `AdaptiveAtWeak/Strong` blend by the player's car rating (mean of
+  the three axes) between `RatingWeak` 0.3 and `RatingStrong` 0.9. Tested end points: margin 0.05 / 0.15, adaptive 0.2 / 0.6.
+  Installed as the shipped `AIBalance.ini`.
+- [ ] Play through career events with the scaled config; tune the ceiling (`AdaptiveAtStrong`, `MarginAtStrong`,
+  `RatingStrong`) if strong cars still win too easily.
 
 ## Phase 3: AI car source (only if Phases 1–2 can't close the gap)
 

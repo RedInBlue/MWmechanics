@@ -38,6 +38,11 @@
 // clamp, so in career this subtracts TorqueMatch * (1 - your car's acceleration rating) from racers' cheat there:
 // the weaker your car, the less torque the AI gets. Only the engine sees it (NOS and grip use the raw cheat),
 // and the wingman's override is left alone while it's active.
+//
+// Scaling with the player's car (no tiers): MarginAtWeak/MarginAtStrong and AdaptiveAtWeak/AdaptiveAtStrong
+// replace RelativeMargin and the adaptive value with a blend set by your car's rating (mean of top speed,
+// handling and acceleration): RatingWeak or below uses the Weak value, RatingStrong or above the Strong one.
+// AdaptiveMin/AdaptiveMax still clamp the result.
 
 #include <windows.h>
 #include <cstdint>
@@ -62,6 +67,15 @@ static const uintptr_t kVehicleVtbl = 0x9E4A78;    // PVehicle's IVehicle vtable
 static const uintptr_t kPlayersBegin = 0xA9F1E4, kPlayersCount = 0xA9F1EC;
 
 static float gMargin, gAdaptiveMin, gAdaptiveMax, gTorqueMatch;
+
+// A value that blends with the player's car rating; off when neither end is set
+struct Scaled {
+    bool on;
+    float weak, strong;
+};
+
+static Scaled gMarginScale, gAdaptiveScale;
+static float gRatingWeak = 0.3f, gRatingStrong = 0.9f;
 
 // UMath table objects {count, min, max, 1/step, data*}
 struct TablePatch {
@@ -118,16 +132,46 @@ static bool IsCareerFloor(float floor) {
     return floor == *(const float *)(kFloors[0].addr + 4) || floor == *(const float *)(kFloors[1].addr + 4);
 }
 
+// Best player Performance per axis ([IVehicle+0xF8] TopSpeed, Handling, Acceleration; valid byte +0x104),
+// as ComputePotentials takes it. False if no player has one.
+static bool PlayerRating(float out[3]) {
+    const char *const *players = *(const char *const *const *)kPlayersBegin;
+    int count = *(const int *)kPlayersCount;
+    bool found = false;
+    for (int i = 0; players && i < count; i++) {
+        const char *v = players[i];
+        if (!v || *(const uintptr_t *)v != kVehicleVtbl || !*(const uint8_t *)(v + 0x104)) continue;
+        const float *perf = (const float *)(v + 0xF8);
+        for (int k = 0; k < 3; k++)
+            if (!found || perf[k] > out[k]) out[k] = perf[k];
+        found = true;
+    }
+    return found;
+}
+
+// Where the player's car sits between RatingWeak (0) and RatingStrong (1)
+static float CarStrength() {
+    float perf[3];
+    if (!PlayerRating(perf)) return 0.0f;
+    float mean = (perf[0] + perf[1] + perf[2]) / 3.0f;
+    float t = (mean - gRatingWeak) / (gRatingStrong - gRatingWeak);
+    return t < 0.0f ? 0.0f : t > 1.0f ? 1.0f : t;
+}
+
+static float Blend(const Scaled &v) {
+    return v.weak + (v.strong - v.weak) * CarStrength();
+}
+
 static float RelativeRamp(float floor, float rating, float top) {
     if (InCareer() && IsCareerFloor(floor)) {
-        floor = rating + gMargin;
+        floor = rating + (gMarginScale.on ? Blend(gMarginScale) : gMargin);
         if (floor > 1.0f) floor = 1.0f;
     }
     return ((Ramp_t)kRamp)(floor, rating, top);
 }
 
 static float THISCALL ClampedAdaptive(const void *raceStatus) {
-    float v = ((Adaptive_t)kAdaptive)(raceStatus);
+    float v = gAdaptiveScale.on ? Blend(gAdaptiveScale) : ((Adaptive_t)kAdaptive)(raceStatus);
     if (v < gAdaptiveMin) v = gAdaptiveMin;
     if (v > gAdaptiveMax) v = gAdaptiveMax;
     return v;
@@ -161,29 +205,15 @@ static bool ReadList(const char *ini, const char *key, float *out, int count) {
     return true;
 }
 
-// Best player Acceleration rating ([IVehicle+0x100], valid byte +0x104), as ComputePotentials takes it; -1 if none
-static float PlayerAccelRating() {
-    const char *const *players = *(const char *const *const *)kPlayersBegin;
-    int count = *(const int *)kPlayersCount;
-    float best = -1.0f;
-    for (int i = 0; players && i < count; i++) {
-        const char *v = players[i];
-        if (!v || *(const uintptr_t *)v != kVehicleVtbl || !*(const uint8_t *)(v + 0x104)) continue;
-        float accel = *(const float *)(v + 0x100);
-        if (accel > best) best = accel;
-    }
-    return best;
-}
-
 typedef float(THISCALL *Cheat_t)(void *cheater);
 
 static float THISCALL EngineCheat(void *cheater) {
     float cheat = ((Cheat_t)(*(void ***)cheater)[1])(cheater);
     if (*(const uintptr_t *)cheater != kRacerCheater || *(const float *)((const char *)cheater + 0x54) >= 0.0f || !InCareer())
         return cheat;
-    float rating = PlayerAccelRating();
-    if (rating < 0.0f) return cheat;
-    cheat -= gTorqueMatch * (1.0f - rating);
+    float perf[3];
+    if (!PlayerRating(perf)) return cheat;
+    cheat -= gTorqueMatch * (1.0f - perf[2]);
     return cheat < -1.0f ? -1.0f : cheat;  // torque never below 25%
 }
 
@@ -194,6 +224,17 @@ static bool ReadFloat(const char *ini, const char *key, float *out) {
     if (!buf[0]) return false;
     *out = strtof(buf, nullptr);
     return true;
+}
+
+// Weak/Strong pair; one end alone is used for both
+static Scaled ReadScaled(const char *ini, const char *weakKey, const char *strongKey) {
+    Scaled v = {false, 0.0f, 0.0f};
+    bool weak = ReadFloat(ini, weakKey, &v.weak);
+    bool strong = ReadFloat(ini, strongKey, &v.strong);
+    if (weak && !strong) v.strong = v.weak;
+    if (strong && !weak) v.weak = v.strong;
+    v.on = weak || strong;
+    return v;
 }
 
 static void Install(const char *ini) {
@@ -222,14 +263,20 @@ static void Install(const char *ini) {
         VirtualProtect((void *)(f.addr + 4), 4, old, &old);
     }
 
-    if (ReadFloat(ini, "RelativeMargin", &gMargin))
+    ReadFloat(ini, "RatingWeak", &gRatingWeak);
+    ReadFloat(ini, "RatingStrong", &gRatingStrong);
+    if (gRatingStrong <= gRatingWeak) gRatingStrong = gRatingWeak + 0.01f;
+
+    gMarginScale = ReadScaled(ini, "MarginAtWeak", "MarginAtStrong");
+    if (ReadFloat(ini, "RelativeMargin", &gMargin) || gMarginScale.on)
         for (uintptr_t site : kRampSites) RedirectCall(site, (void *)&RelativeRamp);
 
     gAdaptiveMin = -1.0f;
     gAdaptiveMax = 1.0f;
     bool clampMin = ReadFloat(ini, "AdaptiveMin", &gAdaptiveMin);
     bool clampMax = ReadFloat(ini, "AdaptiveMax", &gAdaptiveMax);
-    if (clampMin || clampMax) RedirectCall(kAdaptiveSite, (void *)&ClampedAdaptive);
+    gAdaptiveScale = ReadScaled(ini, "AdaptiveAtWeak", "AdaptiveAtStrong");
+    if (clampMin || clampMax || gAdaptiveScale.on) RedirectCall(kAdaptiveSite, (void *)&ClampedAdaptive);
 
     if (ReadFloat(ini, "TorqueMatch", &gTorqueMatch)) {
         DWORD old;
