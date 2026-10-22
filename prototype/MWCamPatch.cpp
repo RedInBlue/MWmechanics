@@ -11,6 +11,10 @@
 //      this in every table, which stops the eye from swinging toward the car on deceleration.
 //   2. Optionally skips the Carbon-only brake damping block in CubicCameraMover::SetDesired
 //      (eye offset.x *= 0.2 while braking above ~10 m/s).
+//   3. Optionally gives muscle cars the same camera set as every other car. The table set is the car's
+//      pvehicle class (attribute 0x247E0956: exotic 1, muscle 2, tuner 3, else 0), picked at 0x484BAC.
+//      Sets 0, 1 and 3 hold identical tables, but set 2's close chase cam uses MW's drift/super far lag
+//      data (longer eye lag, much wider pull-back), which camerainfo edits can't change.
 
 #include <windows.h>
 #include <cstdint>
@@ -110,6 +114,17 @@ static void SkipBrakeDamping() {
     VirtualProtect(p, 2, old, &old);
 }
 
+static void NormalMuscleCamera() {
+    // Camera set switch on car class: ... mov ecx,[esi+0x34]; mov [ecx+4],3 / mov edx,[esi+0x34]; mov [edx+4],2
+    uint8_t *p = FindPattern("8B 4E 34 C7 41 04 03 00 00 00 5F 5E 5B 8B E5 5D C3 8B 56 34 C7 42 04 02 00 00 00");
+    if (!p) return;
+    // muscle: set 2 -> 0
+    DWORD old;
+    VirtualProtect(p + 23, 1, PAGE_EXECUTE_READWRITE, &old);
+    p[23] = 0;
+    VirtualProtect(p + 23, 1, old, &old);
+}
+
 BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
     if (reason == DLL_PROCESS_ATTACH) {
         char ini[MAX_PATH];
@@ -121,6 +136,8 @@ BOOL APIENTRY DllMain(HMODULE module, DWORD reason, LPVOID) {
             RestoreEyeAccelMax();
         if (GetPrivateProfileIntA("MWCamPatch", "SkipBrakeDamping", 1, ini))
             SkipBrakeDamping();
+        if (GetPrivateProfileIntA("MWCamPatch", "NormalMuscleCamera", 1, ini))
+            NormalMuscleCamera();
     }
     return TRUE;
 }

@@ -85,7 +85,11 @@ TCRF says the Carbon OPS2M demo and the April 2006 footage reuse MW's camera sys
 ## Open questions / not verified
 
 - **In-game result is untested.** Static analysis strongly suggests `EyeAccelMax.x` is the "MW swing-in" ([Antonio Moment's mod](https://nfsmods.xyz/mod/5349) notes "the zooming in effect is missing"), but that needs confirming in-game.
-- **What anchor+0x4 (`set`) represents** and how it's chosen. Find the writer in the `CameraAnchor` update code.
+- ~~What anchor+0x4 (`set`) represents~~ **Answered:** the car's class. 0x484BAC reads pvehicle attribute 0x247E0956
+  (VLT collections `racers` 0, `exotic` 1, `muscle` 2, `tuner` 3; `challenger71` also sets 2) and stores it in the anchor.
+  Only `Update` (0x492271) reads it. Sets 0, 1 and 3 have identical tables. Set 2 (muscle) differs only in its close chase
+  cam (POV 2), which uses MW's SuperFar/Drift lag data (eye 1.5/0.5 s, EyeAccel.x −0.25, Min.x −2.5). The accel curves
+  and ±30 ranges are the same for all four. `MWCamPatch` `NormalMuscleCamera` changes the muscle case to set 0 (imm at 0x484BEC).
 - **The rest of Carbon's `Update`** (gear-change table, impact curves, ~20 extra calls) has not been diffed line by line.
 - **Carbon's `+0x100 = 0.8f` write** in the brake block. Its purpose is unknown; it could be a FOV or blur factor.
 

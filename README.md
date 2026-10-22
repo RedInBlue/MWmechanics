@@ -12,7 +12,7 @@ so if a patch seems to have no effect, compare your exe's size and hash first.
 
 | ASI | What it restores | ini switches |
 |---|---|---|
-| `MWCamPatch` | MW chase camera: the eye swings in toward the car under braking; Carbon's brake damping removed | `RestoreEyeSwing`, `SkipBrakeDamping` |
+| `MWCamPatch` | MW chase camera: the eye swings in toward the car under braking; Carbon's brake damping removed; muscle cars get the normal chase cam | `RestoreEyeSwing`, `SkipBrakeDamping`, `NormalMuscleCamera` |
 | `MWTachPatch` | Needle shows audio RPM (smooth upshifts); redline shake at MW speed regardless of SimRate | `UseAudioRPM`, `SmoothRedlineShake`, `RedlineBounce` |
 | `MWGripPatch` | MW lateral grip scale (about 1.2 at speed), throttle force ellipse, launch wheelspin, Carbon-only hacks removed | `RestoreGripScale`, `RestoreThrottleEllipse`, `RemoveBurnoutHack`, `RestoreBurnoutTraction`, `RemovePitchRollScaling` |
 | `AIBalance` | Career (and optionally quick race) AI tuning that scales with your car's rating (no tiers): configurable or player-relative floor for the AI performance bias (Carbon hardcodes 0.75 in career), a clamp on the career adaptive difficulty that sets generic opponents' skill, the catch-up strength curves (stock fades out late in the race), and AI engine torque scaled to your car | `RatingWeak`, `RatingStrong`, `MarginAtWeak`/`AtStrong`, `AdaptiveAtWeak`/`AtStrong`, `QuickRace`, `QuickRaceEasy`/`Medium`/`Hard`, `CareerFloor`, `CareerFloorAlt`, `OtherFloor`, `RelativeMargin`, `AdaptiveMin`, `AdaptiveMax`, `CatchUpCapLow`, `CatchUpCapHigh`, `CatchUpSpreadLow`, `CatchUpSpreadHigh`, `CatchUpTorque`, `TorqueMatch`, `TorqueMatchHold` |
