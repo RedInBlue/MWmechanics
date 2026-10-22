@@ -173,7 +173,9 @@ PerformaTor's standalone `operator()` (0x416900) is unreferenced; the copy actua
   Nothing clamps it, so a negative value cuts torque. `AIBalance` `TorqueMatch` replaces the 5-byte `mov eax,[ecx]; call
   [eax+4]` at 0x7007D9 with a call that subtracts `TorqueMatch × (1 − best player Acceleration rating)` for
   `AIVehicleRacecar` cheaters (vtable 0x9C4D40) in career, unless the override at `+0x54` is active (the wingman). The
-  floor is −1, so torque never goes below 25%.
+  floor is −1, so torque never goes below 25%. `TorqueMatchHold` h replaces `(1 − rating)` with
+  `min(1, (1 − rating) / (1 − h))`: the full cut up to rating h, then a linear fade to 0 at 1.0. Without it the cut lost
+  about 40% by accel 0.5 while the AI's own acceleration stayed far above the player's.
 
 **Floor 0.5 test:** see the A/B table. The bias came out at exactly the predicted values. With the stock car the race
 became close, and the player won, but there's no valid 0.75 control yet (that run's file was deleted before the finish
@@ -228,6 +230,16 @@ immediates, it uses `rating + margin` instead. **`AdaptiveMin/Max`** redirects C
 (`RatingStrong` − `RatingWeak`), 0, 1). The margin in `RelativeRamp` and the adaptive value returned at 0x40A963 become
 Lerp(AtWeak, AtStrong, strength) and are read at race start (`ComputePotentials`, `ComputeSkill`). The stock starter
 (mean 0.29) and the maxed car (0.91) sit at the two ends with the shipped 0.3 / 0.9.
+
+**`AIBalance.asi` quick race:** context 0 with race parameters.
+- `RelativeRamp` also replaces the `OtherFloor` immediate there.
+- `TorqueMatch` applies.
+- ComputeSkill's quick race path calls `GetDifficulty` at 0x40A847 (catch-up off, table 0x9C1B9C {0.15, 0.4, 0.8}) and at
+  0x40A864 (catch-up on, 0x9C1B90 {0.15, 0.4, 1}), then loads `[table + index × 4]`. Both calls go to a wrapper that
+  refills a private 3-entry table: `clamp(0.28 + 0.81 × blended adaptive + QuickRace<Easy|Medium|Hard>)`. Both load
+  displacements (+3) point at that table, so the later 0x63D720 / 0x63E180 adjustments still run.
+- The catch-up controller's quick race path blends the same default curves with A = 0x9D7FD8[difficulty] {0, 0.5, 1}, so the
+  `CatchUp*` table options already applied to quick race.
 
 **`AIBalance.asi`** makes the floors configurable (`CareerFloor`, `CareerFloorAlt`, `OtherFloor`): it rewrites the immediates of
 the `mov [esp+0x10], imm32` at 0x42F573 (0.75), 0x42F569 (0.7) and 0x42F57D (1.0, shared by non-career and the 0x63E180

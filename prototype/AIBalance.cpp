@@ -38,11 +38,19 @@
 // clamp, so in career this subtracts TorqueMatch * (1 - your car's acceleration rating) from racers' cheat there:
 // the weaker your car, the less torque the AI gets. Only the engine sees it (NOS and grip use the raw cheat),
 // and the wingman's override is left alone while it's active.
+// TorqueMatchHold: keep the full TorqueMatch cut up to this acceleration rating, then fade it linearly to 0 at 1.0,
+// so early upgrades don't take the cut away (0 = the plain TorqueMatch * (1 - rating)).
 //
 // Scaling with the player's car (no tiers): MarginAtWeak/MarginAtStrong and AdaptiveAtWeak/AdaptiveAtStrong
 // replace RelativeMargin and the adaptive value with a blend set by your car's rating (mean of top speed,
 // handling and acceleration): RatingWeak or below uses the Weak value, RatingStrong or above the Strong one.
 // AdaptiveMin/AdaptiveMax still clamp the result.
+//
+// QuickRace=1 applies the same scaling to quick races: the margin replaces the 1.0 floor quick race uses,
+// TorqueMatch applies, and AI skill becomes the career skill for your car (0.28 + 0.81 * blended adaptive)
+// plus QuickRaceEasy/Medium/Hard for the chosen difficulty. ComputeSkill's quick race path reads skill from
+// a 3-entry table indexed by GRaceParameters::GetDifficulty (0x40A847 / 0x40A864); both loads are pointed at
+// a table refilled at each call, so Carbon's later adjustments to skill still apply.
 
 #include <windows.h>
 #include <cstdint>
@@ -66,7 +74,7 @@ static const uintptr_t kRacerCheater = 0x9C4D40;   // AIVehicleRacecar's ICheate
 static const uintptr_t kVehicleVtbl = 0x9E4A78;    // PVehicle's IVehicle vtable
 static const uintptr_t kPlayersBegin = 0xA9F1E4, kPlayersCount = 0xA9F1EC;
 
-static float gMargin, gAdaptiveMin, gAdaptiveMax, gTorqueMatch;
+static float gMargin, gAdaptiveMin, gAdaptiveMax, gTorqueMatch, gTorqueHold;
 
 // A value that blends with the player's car rating; off when neither end is set
 struct Scaled {
@@ -75,6 +83,23 @@ struct Scaled {
 };
 
 static Scaled gMarginScale, gAdaptiveScale;
+
+static const uintptr_t kDifficulty = 0x63C5C0;  // GRaceParameters::GetDifficulty: 0 easy, 1 medium, 2 hard
+
+// Quick race skill table loads in ComputeSkill: call GetDifficulty, then mov reg, [table + eax*4]
+struct SkillSite {
+    uintptr_t call, load;
+    uint8_t bytes[7];
+};
+
+static const SkillSite kSkillSites[] = {
+    {0x40A847, 0x40A84C, {0x8B, 0x0C, 0x85, 0x9C, 0x1B, 0x9C, 0x00}},  // catch-up off: {0.15, 0.4, 0.8}
+    {0x40A864, 0x40A869, {0x8B, 0x14, 0x85, 0x90, 0x1B, 0x9C, 0x00}},  // catch-up on: {0.15, 0.4, 1}
+};
+
+static bool gQuickRace;
+static float gQuickRaceOffset[3] = {-0.2f, 0.0f, 0.2f};
+static float gQuickRaceSkill[3];
 static float gRatingWeak = 0.3f, gRatingStrong = 0.9f;
 
 // UMath table objects {count, min, max, 1/step, data*}
@@ -126,6 +151,12 @@ static bool InCareer() {
     return rs && *(const int *)(rs + 0x6A18) == 3;
 }
 
+// Quick race: context 0 with race parameters (free roam has none)
+static bool InQuickRace() {
+    const char *rs = *(const char *const *)kRaceStatus;
+    return gQuickRace && rs && *(const int *)(rs + 0x6A18) == 0 && *(const void *const *)(rs + 0x6A1C);
+}
+
 // The floor ComputePotentials picked is one of the two career immediates (as patched), not the
 // 1.0 it uses for 0x63E180 (bosses) and other modes
 static bool IsCareerFloor(float floor) {
@@ -163,11 +194,24 @@ static float Blend(const Scaled &v) {
 }
 
 static float RelativeRamp(float floor, float rating, float top) {
-    if (InCareer() && IsCareerFloor(floor)) {
+    bool quick = InQuickRace() && floor == *(const float *)(kFloors[2].addr + 4);
+    if ((InCareer() && IsCareerFloor(floor)) || quick) {
         floor = rating + (gMarginScale.on ? Blend(gMarginScale) : gMargin);
         if (floor > 1.0f) floor = 1.0f;
     }
     return ((Ramp_t)kRamp)(floor, rating, top);
+}
+
+typedef int(THISCALL *Difficulty_t)(const void *params);
+
+static int THISCALL QuickRaceDifficulty(const void *params) {
+    int difficulty = ((Difficulty_t)kDifficulty)(params);
+    float base = 0.28f + 0.81f * Blend(gAdaptiveScale);
+    for (int i = 0; i < 3; i++) {
+        float v = base + gQuickRaceOffset[i];
+        gQuickRaceSkill[i] = v < 0.0f ? 0.0f : v > 1.0f ? 1.0f : v;
+    }
+    return difficulty;
 }
 
 static float THISCALL ClampedAdaptive(const void *raceStatus) {
@@ -209,11 +253,13 @@ typedef float(THISCALL *Cheat_t)(void *cheater);
 
 static float THISCALL EngineCheat(void *cheater) {
     float cheat = ((Cheat_t)(*(void ***)cheater)[1])(cheater);
-    if (*(const uintptr_t *)cheater != kRacerCheater || *(const float *)((const char *)cheater + 0x54) >= 0.0f || !InCareer())
+    if (*(const uintptr_t *)cheater != kRacerCheater || *(const float *)((const char *)cheater + 0x54) >= 0.0f ||
+        !(InCareer() || InQuickRace()))
         return cheat;
     float perf[3];
     if (!PlayerRating(perf)) return cheat;
-    cheat -= gTorqueMatch * (1.0f - perf[2]);
+    float weakness = (1.0f - perf[2]) / (1.0f - gTorqueHold);
+    cheat -= gTorqueMatch * (weakness > 1.0f ? 1.0f : weakness);
     return cheat < -1.0f ? -1.0f : cheat;  // torque never below 25%
 }
 
@@ -251,6 +297,8 @@ static void Install(const char *ini) {
         if (!TableMatches(t)) return;
     static const uint8_t kTorqueBytes[] = {0x8B, 0x01, 0xFF, 0x50, 0x04, 0xD8, 0x0D, 0x70, 0x2D, 0x9C, 0x00};
     if (!BytesMatch(kTorqueSite, kTorqueBytes, sizeof(kTorqueBytes))) return;
+    for (const SkillSite &site : kSkillSites)
+        if (!CallTargets(site.call, kDifficulty) || !BytesMatch(site.load, site.bytes, sizeof(site.bytes))) return;
 
     for (const FloorPatch &f : kFloors) {
         float v;
@@ -278,7 +326,26 @@ static void Install(const char *ini) {
     gAdaptiveScale = ReadScaled(ini, "AdaptiveAtWeak", "AdaptiveAtStrong");
     if (clampMin || clampMax || gAdaptiveScale.on) RedirectCall(kAdaptiveSite, (void *)&ClampedAdaptive);
 
+    char flag[8];
+    GetPrivateProfileStringA("AIBalance", "QuickRace", "", flag, sizeof(flag), ini);
+    gQuickRace = flag[0] == '1';
+    ReadFloat(ini, "QuickRaceEasy", &gQuickRaceOffset[0]);
+    ReadFloat(ini, "QuickRaceMedium", &gQuickRaceOffset[1]);
+    ReadFloat(ini, "QuickRaceHard", &gQuickRaceOffset[2]);
+    if (gQuickRace && gAdaptiveScale.on)
+        for (const SkillSite &site : kSkillSites) {
+            RedirectCall(site.call, (void *)&QuickRaceDifficulty);
+            uint32_t table = (uint32_t)(uintptr_t)gQuickRaceSkill;
+            DWORD old;
+            VirtualProtect((void *)(site.load + 3), 4, PAGE_EXECUTE_READWRITE, &old);
+            memcpy((void *)(site.load + 3), &table, 4);
+            VirtualProtect((void *)(site.load + 3), 4, old, &old);
+        }
+
     if (ReadFloat(ini, "TorqueMatch", &gTorqueMatch)) {
+        ReadFloat(ini, "TorqueMatchHold", &gTorqueHold);
+        if (gTorqueHold < 0.0f) gTorqueHold = 0.0f;
+        if (gTorqueHold > 0.95f) gTorqueHold = 0.95f;
         DWORD old;
         VirtualProtect((void *)kTorqueSite, 5, PAGE_EXECUTE_READWRITE, &old);
         *(uint8_t *)kTorqueSite = 0xE8;
